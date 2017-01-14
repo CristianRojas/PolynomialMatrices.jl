@@ -95,7 +95,8 @@ function colred{T,M,O,N}(p::PolyMatrix{T,M,O,N})
   N < 2 || size(p,1) ≥ size(p,2) ||
     error("colred: Polynomial matrix is not full column rank")
 
-  p_temp = copy(p)
+  T1      = promote_type(T,Float16)
+  p_temp  = T1 == T ? copy(p) : convert(PolyMatrix{T1,AbstractArray{T1,N},O,N}, p)
   c       = p_temp.coeffs          # Dictionary of coefficient matrices of p
   num_col = N < 2 ? 1 : size(p,2)  # Number of columns of p
   U       = PolyMatrix(eye(T,num_col),p.var)
@@ -173,8 +174,9 @@ function colred{T,M1,M2,O1,O2,N1,N2}(p1::PolyMatrix{T,M1,O1,N1},
   N1 < 2 || size(p1,1) ≥ size(p1,2) ||
     error("colred: Polynomial matrix `p1` is not full column rank")
 
-  p1_temp  = copy(p1)
-  p2_temp  = copy(p2)
+  T1       = promote_type(T,Float16)
+  p1_temp  = T1 == T ? copy(p1) : convert(PolyMatrix{T1,AbstractArray{T1,N1},O1,N1}, p1)
+  p2_temp  = T1 == T ? copy(p2) : convert(PolyMatrix{T1,AbstractArray{T1,N2},O2,N2}, p2)
   c1       = coeffs(p1_temp)          # Dictionary of coefficient matrices of p1
   c2       = coeffs(p2_temp)          # Dictionary of coefficient matrices of p2
   num_col  = N1 < 2 ? 1 : size(p1,2)  # Number of columns of p1 and p2
@@ -240,7 +242,9 @@ end
 function rowred{T,M,O,N}(p::PolyMatrix{T,M,O,N})
   (N < 2 && size(p,1) ≤ 1) || size(p,1) ≤ size(p,2) ||
     error("rowred: Polynomial matrix is not full row rank")
-  p_temp  = copy(p)
+
+  T1      = promote_type(T,Float16)
+  p_temp  = T1 == T ? copy(p) : convert(PolyMatrix{T1,AbstractArray{T1,N},O,N}, p)
   c       = coeffs(p_temp)  # Dictionary of coefficient matrices of p
   num_row = size(p,1)      # Number of rows of p
   U       = PolyMatrix(eye(T,num_row),p.var)
@@ -319,11 +323,12 @@ function rowred{T,M1,M2,O1,O2,N1,N2}(p1::PolyMatrix{T,M1,O1,N1},
   (N1 < 2 && size(p1,1) ≤ 1) || size(p1,1) ≤ size(p1,2) ||
     error("rowred: Polynomial matrix `p1` is not full row rank")
 
-  p1_temp  = copy(p1)
-  p2_temp  = copy(p2)
+  T1       = promote_type(T,Float16)
+  p1_temp  = T1 == T ? copy(p1) : convert(PolyMatrix{T1,AbstractArray{T1,N1},O1,N1}, p1)
+  p2_temp  = T1 == T ? copy(p2) : convert(PolyMatrix{T1,AbstractArray{T1,N2},O2,N2}, p2)
   c1       = coeffs(p_temp1)  # Dictionary of coefficient matrices of p1
   c2       = coeffs(p_temp2)  # Dictionary of coefficient matrices of p2
-  num_row  = size(p1,1)      # Number of rows of p1 and p2
+  num_row  = size(p1,1)       # Number of rows of p1 and p2
 
   indN    = zeros(Int,num_row)  # Collection of non-zero entries of n
   while true

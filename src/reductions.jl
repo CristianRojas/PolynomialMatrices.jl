@@ -3,7 +3,7 @@ function col_degree{T,M,O,N}(p::PolyMatrix{T,M,O,N})
   max_deg = degree(p)
   num_col = size(p,2)
 
-  k = fill(-1,1,num_col)
+  k = fill(-1,num_col)
   for i = max_deg:-1:0
     v = coeffs(p)[i]
     for j = 1:num_col
@@ -20,7 +20,7 @@ function row_degree{T,M,O,N}(p::PolyMatrix{T,M,O,N})
   max_deg = degree(p)
   num_row = size(p,1)
 
-  k = fill(-1,num_row,1)
+  k = fill(-1,num_row)
   for i = max_deg:-1:0
     v = coeffs(p)[i]
     for j = 1:num_row
@@ -95,8 +95,11 @@ function colred{T,M,O,N}(p::PolyMatrix{T,M,O,N})
   N < 2 || size(p,1) ≥ size(p,2) ||
     error("colred: Polynomial matrix is not full column rank")
 
+  # NOTE: This type conversion should be done in compile-time
+  # (another overkill use for @generated ?)
   T1      = promote_type(T,Float16)
   p_temp  = T1 == T ? copy(p) : convert(PolyMatrix{T1,AbstractArray{T1,N},O,N}, p)
+
   c       = p_temp.coeffs          # Dictionary of coefficient matrices of p
   num_col = N < 2 ? 1 : size(p,2)  # Number of columns of p
   U       = PolyMatrix(eye(T,num_col),p.var)
@@ -384,4 +387,104 @@ function rowred{T,M1,M2,O1,O2,N1,N2}(p1::PolyMatrix{T,M1,O1,N1},
     # Reset collection indN
     fill!(indN, 0)
   end
+end
+
+# Computes a triangular form for a polynomial matrix,
+# based on a left unimodular matrix, and it returns both the
+# triangular matrix and the unimodular transformation used
+# (based on the Henrion-Sebek algorithm)
+function ltriang{T,M,O,N}(p::PolyMatrix{T,M,O,N})
+  n, m = size(p)
+  m ≥ n || error("ltriang: p must have full row rank")
+
+  dp = degree(p)
+
+  # Compute upper bound on degree of unimodular matrix
+  col   = sort(col_degree(p),rev=true)
+  row   = row_degree(p)
+  dUmax = min(sum(col[1:n]),sum(row))
+
+  Q       = AbstractArray
+  R       = AbstractArray
+  dU      = Int
+  shape   = AbstractArray
+  shape_b = AbstractArray
+
+  for dU = 0:dUmax
+
+    # Build Sylvester matrix
+    Rd = zeros(T,n*(dU+1),m*(dp+dU+1))
+    for (k,c) in coeffs(p)
+      for i = 0:dU
+        Rd[i*n+1:(i+1)*n,dp-k+i+1:dp+dU+1:dp-k+i+1+(m-1)*(dp+dU+1)] = c
+      end
+    end
+
+    # Triangularize Sylvester matrix
+    Q, R = qr(Rd; thin=false)
+
+    # Extract triangular shape
+    shape_b = zeros(Int,n*(dU+1),2)
+    for i = 1:n*(dU+1)
+      for j = 1:m*(dp+dU+1)
+        if !(R[i,j] ≈ 0)
+          shape_b[i,1] = j
+          shape_b[i,2] = ((j -1) ÷ (dp+dU+1)) + 1
+          break
+        end
+      end
+    end
+
+    # Choose suitable rows for triangularized p
+    shape      = zeros(Int,n)
+    curr_group = shape_b[1,2]
+    iter       = 1
+    for j = 2:n*(dU+1)
+
+      # Terminate if all n rows have been chosen
+      if iter == n
+        break
+      end
+
+      if shape_b[j,2] ≠ curr_group
+        shape[iter] = j-1
+        curr_group  = shape_b[j,2]
+        iter       += 1
+      end
+    end
+
+    if shape_b[n*(dU+1),2] ≠ shape_b[n*(dU+1)-1,2]
+      shape[n]  = n*(dU+1)
+      iter     += 1
+    end
+
+    if iter > n
+      break
+    end
+  end
+
+  # Return the chosen rows of Q and R
+  c_triang = SortedDict(Dict{Int,AbstractArray{eltype(Q),N}}())
+  for k = 0:dp+dU
+    c_triang[k] = R[shape, dp+dU-k+1:dp+dU+1:dp+dU-k+1+(m-1)*(dp+dU+1)]
+  end
+  p_triang = PolyMatrix(c_triang, (n,m), p.var)
+
+  c_triang = SortedDict(Dict{Int,AbstractArray{eltype(Q),N}}())
+  for k = 0:dU
+    c_triang[k] = Q[(dU-k)*n+1:(dU-k+1)*n,shape]'
+  end
+  Q_triang = PolyMatrix(c_triang, (n,n), p.var)
+
+  p_triang, Q_triang
+end
+
+# Computes a triangular form for a polynomial matrix,
+# based on a right unimodular matrix, and it returns both the
+# triangular matrix and the unimodular transformation used
+# NOTE: It would be preferable to avoid the transposes, but the QR
+# factorization function only applies to left factorizations
+function rtriang{T,M,O,N}(p::PolyMatrix{T,M,O,N})
+  p_triang, Q_triang = ltriang(p')
+  return p_triang', Q_triang'
 end

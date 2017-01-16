@@ -21,6 +21,7 @@ export col_degree, row_degree
 export high_col_deg_matrix, high_row_deg_matrix
 export is_col_proper, is_row_proper
 export colred, rowred
+export ltriang, rtriang
 
 # Include files
 include("polymatrix.jl")

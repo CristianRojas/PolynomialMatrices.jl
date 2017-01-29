@@ -151,6 +151,8 @@ function insert!{T,M,O,N}(p::PolyMatrix{T,M,O,N}, k::Int, A)
   insert!(coeffs(p), k, A)
 end
 
+# NOTE: It would be nice to overload Base.vcat and Base.hcat
+
 # Obtain dictionary of coefficient matrices
 coeffs(p::PolyMatrix) = p.coeffs
 

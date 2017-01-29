@@ -389,47 +389,206 @@ function rowred{T,M1,M2,O1,O2,N1,N2}(p1::PolyMatrix{T,M1,O1,N1},
   end
 end
 
+# QR factorization routines (borrowed from Julia base)
+
+# apply reflector from left
+@inline function reflectorApply!(x::AbstractVector, τ::Number, A::StridedMatrix)
+  m, n = size(A)
+  @inbounds begin
+    for j = 1:n
+      # dot
+      vAj = A[1, j]
+      for i = 2:m
+        vAj += x[i]'*A[i, j]
+      end
+
+      vAj = τ'*vAj
+      # ger
+      A[1, j] -= vAj
+      for i = 2:m
+        A[i, j] -= x[i]*vAj
+      end
+    end
+  end
+  A
+end
+
+function getQ{T}(A::AbstractMatrix{T}, τ::Vector{T}, pivot::Vector{Int}, num::Int)
+  mA, nA = size(A)
+  B      = eye(T, mA)
+  @inbounds begin
+    for k = num:-1:1
+      for j = 1:mA
+        vBj = B[k,j]
+        for i = k+1:mA
+          vBj += conj(A[i,pivot[k]])*B[i,j]
+        end
+        vBj = τ[k]*vBj
+        B[k,j] -= vBj
+        for i = k+1:mA
+          B[i,j] -= A[i,pivot[k]]*vBj
+        end
+      end
+    end
+  end
+  B
+end
+# function getQ{T}(A::AbstractMatrix{T}, τ::Vector{T}, pivot::Vector{Int}, num::Int)
+#   mA, nA = size(A)
+#   B      = eye(T, mA)
+#   @inbounds begin
+#     for k = min(mA,nA):-1:1
+#       for j = 1:mA
+#         vBj = B[k,j]
+#         for i = k+1:mA
+#           vBj += conj(A[i,k])*B[i,j]
+#         end
+#         vBj = τ[k]*vBj
+#         B[k,j] -= vBj
+#         for i = k+1:mA
+#           B[i,j] -= A[i,k]*vBj
+#         end
+#       end
+#     end
+#   end
+#   B
+# end
+
+function qr_new{T<:Number}(A::AbstractMatrix{T})
+
+  # Promote type T to its field extension
+  TT = typeof(zero(T)/one(T))
+
+  # Copy A, so it can be modified
+  m, n = size(A)
+  AA   = similar(A, TT, (m,n))
+  copy!(AA, A)
+
+  τ        = zeros(TT, min(m,n))
+  pivot    = zeros(Int, min(m,n))
+  curr_piv = 1
+  curr_row = 1
+  while true
+    if curr_row > m || curr_piv > n
+      curr_piv -= 1
+      curr_row -= 1
+      break
+    end
+
+    len_x = m - curr_row + 1
+    local x
+    local ξ1
+    local normu
+    while true
+
+      curr_piv ≤ n || break
+
+      # Construct reflector
+      x     = view(AA, curr_row:m, curr_piv)
+      ξ1    = x[1]
+      normu = abs2(ξ1)
+      for i = 2:len_x
+        normu += abs2(x[i])
+      end
+      if normu != zero(normu)
+        break
+      end
+      curr_piv += 1
+    end
+
+    if curr_piv > n
+      curr_piv -= 1
+      curr_row -= 1
+      break
+    end
+
+    pivot[curr_row]  = curr_piv
+    normu            = sqrt(normu)
+    ν                = copysign(normu, real(ξ1))
+    ξ1              += ν
+    x[1]             = -ν
+    for i = 2:len_x
+      x[i] /= ξ1
+    end
+    τk          = ξ1/ν
+    τ[curr_row] = τk
+    reflectorApply!(x, τk, view(AA, curr_row:m, curr_piv + 1:n))
+
+    curr_piv += 1
+    curr_row += 1
+  end
+  Q = getQ(AA, τ, pivot, curr_row)
+
+  for j = 1:curr_row
+    AA[j+1:end,pivot[j]] = 0
+  end
+
+  Q, AA
+end
+
 # Computes a triangular form for a polynomial matrix,
-# based on a left unimodular matrix, and it returns both the
+# using a left unimodular matrix, and it returns both the
 # triangular matrix and the unimodular transformation used
 # (based on the Henrion-Sebek algorithm)
+# NOTE: We could add an optional argument, `error_info = false`, which if true
+# would make a flag be outputted in case of a degenerate row rank matrix
+# NOTE: What happens if p has dimension 1?
 function ltriang{T,M,O,N}(p::PolyMatrix{T,M,O,N})
   n, m = size(p)
-  m ≥ n || error("ltriang: p must have full row rank")
+  #n ≤ m || error("ltriang: p must have full row rank")
 
   dp = degree(p)
 
   # Compute upper bound on degree of unimodular matrix
   col   = sort(col_degree(p),rev=true)
   row   = row_degree(p)
-  dUmax = min(sum(col[1:n]),sum(row))
+  dUmax = min(sum(col[1:min(n,m)]),sum(row))
 
+  # Append an identity matrix to p
+  is_zero_present = false
+  c = SortedDict(Dict{Int,M}())
+  for (k,v) in coeffs(p)
+    if k == 0
+      is_zero_present = true
+      v = [v speye(T,n)]
+    else
+      v = [v zeros(T,(n,n))]
+    end
+    insert!(c,k,v)
+  end
+  v = similar(first(coeffs(p))[2])
+  fill!(v,0)
+  is_zero_present || insert!(c,0,[v speye(T,n)])
+  p2 = PolyMatrix(c,(n,n+m),p.var)
+
+  # Variables needed outside the loop
   Q       = AbstractArray
   R       = AbstractArray
   dU      = Int
   shape   = AbstractArray
   shape_b = AbstractArray
 
-  for dU = 0:dUmax
+  dU = 0
+  while true
 
     # Build Sylvester matrix
-    Rd = zeros(T,n*(dU+1),m*(dp+dU+1))
-    for (k,c) in coeffs(p)
+    Rd = zeros(T,n*(dU+1),(m+n)*(dp+dU+1))
+    for (k,c) in coeffs(p2)
       for i = 0:dU
-        Rd[i*n+1:(i+1)*n,dp-k+i+1:dp+dU+1:dp-k+i+1+(m-1)*(dp+dU+1)] = c
+        Rd[i*n+1:(i+1)*n,dp-k+i+1:dp+dU+1:dp-k+i+1+(m+n-1)*(dp+dU+1)] = c
       end
     end
 
     # Triangularize Sylvester matrix
-    Q, R = qr(Rd; thin=false)
+    Q, R = qr_new(Rd)
 
     # Extract triangular shape
     shape_b = zeros(Int,n*(dU+1),2)
     for i = 1:n*(dU+1)
-      for j = 1:m*(dp+dU+1)
+      for j = 1:(m+n)*(dp+dU+1)
         if !(R[i,j] ≈ 0)
           shape_b[i,1] = j
-          shape_b[i,2] = ((j -1) ÷ (dp+dU+1)) + 1
+          shape_b[i,2] = ((j-1) ÷ (dp+dU+1)) + 1
           break
         end
       end
@@ -437,33 +596,35 @@ function ltriang{T,M,O,N}(p::PolyMatrix{T,M,O,N})
 
     # Choose suitable rows for triangularized p
     shape      = zeros(Int,n)
-    curr_group = shape_b[1,2]
+    curr_group = shape_b[1,1]
     iter       = 1
-    for j = 2:n*(dU+1)
+    for j = 1:n*(dU+1)-1
 
-      # Terminate if all n rows have been chosen
-      if iter == n
-        break
+      if shape_b[j+1,2] ≠ curr_group
+        shape[iter] = j
+        curr_group  = shape_b[j+1,2]
+        iter       += 1
       end
 
-      if shape_b[j,2] ≠ curr_group
-        shape[iter] = j-1
-        curr_group  = shape_b[j,2]
-        iter       += 1
+      # Terminate if all n rows have been chosen
+      if iter == n+1
+        break
       end
     end
 
-    if shape_b[n*(dU+1),2] ≠ shape_b[n*(dU+1)-1,2]
-      shape[n]  = n*(dU+1)
-      iter     += 1
+    if iter ≤ n
+      shape[iter]  = n*(dU+1)
+      iter        += 1
     end
 
     if iter > n
       break
     end
+
+    dU += 1
   end
 
-  # Return the chosen rows of Q and R
+  # Build the triangularized polynomial matrix and the unimodular transformation matrix
   c_triang = SortedDict(Dict{Int,AbstractArray{eltype(Q),N}}())
   for k = 0:dp+dU
     c_triang[k] = R[shape, dp+dU-k+1:dp+dU+1:dp+dU-k+1+(m-1)*(dp+dU+1)]

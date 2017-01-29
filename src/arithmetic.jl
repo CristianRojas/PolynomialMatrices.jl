@@ -80,3 +80,6 @@ function *{T1,M1,O,N,T2,M2}(p1::PolyMatrix{T1,M1,O,N}, p2::PolyMatrix{T2,M2,O,N}
 end
 *(p1::PolyMatrix, p2::AbstractArray) = p1 * PolyMatrix(p2,p1.var)
 *(p1::AbstractArray, p2::PolyMatrix) = PolyMatrix(p1,p2.var) * p2
+*(c::Poly, p::PolyMatrix)            = PolyMatrix(map(x->c*x, p))
+*(c::Poly, p::AbstractArray)         = map(x->c*x, p)
+*(p::AbstractArray, c::Poly)         = c*p
